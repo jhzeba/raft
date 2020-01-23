@@ -33,19 +33,19 @@ class raft(object):
         self.node_id = node_id
         self.quorum = int(len(nodes) / 2 + 1)
 
-        self.demote = event.Event()
+        self.demoted = event.Event()
         self.reset_timer = event.Event()
 
     def request_vote(self, term, candidate_id, last_log_index, last_log_term):
         demote = term > self.current_term
 
         if demote == True:
-            print('request_vote: new leader found, demoting...')
+            print('request_vote: higher term found, demoting...')
 
             self.current_term = term
             self.voted_for = None
 
-            self.demote.set()
+            self.demoted.set()
 
         if term < self.current_term:
             print('request_vote: vote to #%d denied' % candidate_id)
@@ -73,12 +73,12 @@ class raft(object):
         demote = term > self.current_term
 
         if demote == True:
-            print('append_entries: new leader found, demoting...')
+            print('append_entries: higher term found, demoting...')
 
             self.current_term = term
             self.voted_for = None
 
-            self.demote.set()
+            self.demoted.set()
 
         if term < self.current_term:
             return {'term': self.current_term, 'success': False}
@@ -96,7 +96,7 @@ class raft(object):
 class follower(object):
     def __init__(self, raft):
         self.raft = raft
-        self.raft.demote.clear()
+        self.raft.demoted.clear()
 
     def run(self):
         while True:
@@ -116,11 +116,9 @@ class follower(object):
 class candidate(object):
     def __init__(self, raft):
         self.raft = raft
-        self.raft.demote.clear()
+        self.raft.demoted.clear()
 
         self.votes_granted = 0
-        self.votes_denied = 0
-
         self.vote_processed = event.Event()
 
     def _send_vote_request(self, data, node_id, node_port):
@@ -142,7 +140,7 @@ class candidate(object):
             print('new leader found #%d, switching to follower...' % node_id)
 
             self.raft.current_term = term
-            self.raft.demote.set()
+            self.raft.demoted.set()
 
             return
 
@@ -150,11 +148,11 @@ class candidate(object):
             print('vote granted from #%d' % node_id)
             self.votes_granted += 1
 
+            if self.votes_granted >= self.raft.quorum:
+                self.vote_processed.set()
+
         else:
             print('vote denied from #%d' % node_id)
-            self.votes_denied += 1
-
-        self.vote_processed.set()
 
     def _send_vote_requests(self):
         last_log_index = -1
@@ -185,27 +183,21 @@ class candidate(object):
         return jobs
 
     def run(self):
-        while self.raft.demote.is_set() == False and \
-              self.votes_granted < self.raft.quorum:
-
+        while True:
             self.raft.current_term += 1
             self.raft.voted_for = self.raft.node_id
 
             print('starting new term #%d' % self.raft.current_term)
 
             self.votes_granted = 1
+            self.vote_processed.clear()
 
             timer = election_timer()
             jobs = None
 
             try:
                 jobs = self._send_vote_requests()
-
-                while self.raft.demote.is_set() == False and \
-                      self.votes_granted < self.raft.quorum:
-
-                    gevent.wait([self.vote_processed, self.raft.demote], count=1)
-                    self.vote_processed.clear()
+                gevent.wait([self.vote_processed, self.raft.demoted], count=1)
 
             except gevent.timeout.Timeout:
                 continue
@@ -214,13 +206,13 @@ class candidate(object):
                 timer.close()
                 gevent.killall(jobs)
 
-            return self.raft.demote.is_set() == False
+            return self.raft.demoted.is_set() == False
 
 
 class leader(object):
     def __init__(self, raft):
         self.raft = raft
-        self.raft.demote.clear()
+        self.raft.demoted.clear()
 
         self.next_index = []
         self.match_index = []
@@ -242,7 +234,7 @@ class leader(object):
             print('discovered higher term %d from #%d, switching to follower...' % (term, node_id))
 
             self.raft.current_term = term
-            self.raft.demote.set()
+            self.raft.demoted.set()
 
     def _send_heartbeats(self):
         prev_log_index = -1
@@ -275,7 +267,7 @@ class leader(object):
         return jobs
 
     def run(self):
-        while self.raft.demote.is_set() == False:
+        while self.raft.demoted.is_set() == False:
             jobs = self._send_heartbeats()
             gevent.sleep(1.25)
 
