@@ -12,7 +12,7 @@ rng.seed(0)
 
 
 def election_timer():
-    timeout = 5 * rng.randint(50, 100) / 100
+    timeout = 0.5 * rng.randint(50, 100) / 100
 
     timer = gevent.Timeout(timeout)
     timer.start()
@@ -36,7 +36,7 @@ def recv_thread(raft):
     node.bind()
 
     while True:
-        data, addr = node.recv_from()
+        data, addr = node.recv()
         data = json.loads(data)
 
         if 'function' not in data:
@@ -329,7 +329,7 @@ class leader(object):
     def run(self):
         while self.raft.demoted.is_set() == False:
             jobs = self._send_heartbeats()
-            gevent.sleep(1.25)
+            gevent.sleep(0.25)
 
             gevent.killall(jobs)
 
