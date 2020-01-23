@@ -20,6 +20,70 @@ def election_timer():
     return timer
 
 
+def load_nodes(conf):
+    nodes = {}
+
+    conf = json.loads(open(conf).read())
+
+    for node_id, node_port in conf['nodes'].items():
+        nodes[int(node_id)] = node(node_port)
+
+    return nodes
+
+
+def recv_thread(raft):
+    node = raft.nodes[raft.node_id]
+    node.bind()
+
+    while True:
+        data, addr = node.recv_from()
+        data = json.loads(data)
+
+        if 'function' not in data:
+            print('invalid request from %s: %s' % (addr, data))
+
+        else:
+            print(data, addr)
+
+            if data['function'] == 'request_vote':
+                data = raft.request_vote(data['term'],
+                                         data['candidate_id'],
+                                         data['last_log_index'],
+                                         data['last_log_term'])
+
+            elif data['function'] == 'append_entries':
+                data = raft.append_entries(data['term'],
+                                           data['leader_id'],
+                                           data['prev_log_index'],
+                                           data['prev_log_term'],
+                                           data['entries'],
+                                           data['leader_commit_index'])
+
+            else:
+                raise RuntimeError('invalid function from %s: %s' % (addr, data))
+
+            data = bytes(json.dumps(data), 'utf-8')
+            node.send_to(data, addr)
+
+
+class node(object):
+    def __init__(self, port):
+        self.port = port
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def bind(self):
+        self.socket.bind(('127.0.0.1', self.port))
+
+    def send(self, data):
+        self.socket.sendto(data, 0, ('127.0.0.1', self.port))
+
+    def send_to(self, data, addr):
+        self.socket.sendto(data, 0, addr)
+
+    def recv(self):
+        return self.socket.recvfrom(1024)
+
+
 class raft(object):
     def __init__(self, nodes, node_id):
         self.current_term = 0
@@ -121,14 +185,12 @@ class candidate(object):
         self.votes_granted = 0
         self.vote_processed = event.Event()
 
-    def _send_vote_request(self, data, node_id, node_port):
+    def _send_vote_request(self, data, node_id, node):
         print('sending request_vote to #%d' % node_id)
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        node.send(data)
 
-        s.sendto(data, 0, ('127.0.0.1', node_port))
-
-        data, addr = s.recvfrom(1024)
+        data, addr = node.recv()
         data = json.loads(data)
 
         term = data['term']
@@ -174,11 +236,11 @@ class candidate(object):
 
         jobs = []
 
-        for node_id, node_port in self.raft.nodes.items():
+        for node_id, node in self.raft.nodes.items():
             if node_id == self.raft.node_id:
                 continue
 
-            jobs.append(gevent.spawn(self._send_vote_request, data, node_id, node_port))
+            jobs.append(gevent.spawn(self._send_vote_request, data, node_id, node))
 
         return jobs
 
@@ -217,14 +279,12 @@ class leader(object):
         self.next_index = []
         self.match_index = []
 
-    def _send_heartbeat(self, data, node_id, node_port):
+    def _send_heartbeat(self, data, node_id, node):
         print('sending append_entries to #%d' % node_id)
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        node.send(data)
 
-        s.sendto(data, 0, ('127.0.0.1', node_port))
-
-        data, addr = s.recvfrom(1024)
+        data, addr = node.recv()
         data = json.loads(data)
 
         term = data['term']
@@ -258,11 +318,11 @@ class leader(object):
 
         jobs = []
 
-        for node_id, node_port in self.raft.nodes.items():
+        for node_id, node in self.raft.nodes.items():
             if node_id == self.raft.node_id:
                 continue
 
-            jobs.append(gevent.spawn(self._send_heartbeat, data, node_id, node_port))
+            jobs.append(gevent.spawn(self._send_heartbeat, data, node_id, node))
 
         return jobs
 
@@ -272,52 +332,6 @@ class leader(object):
             gevent.sleep(1.25)
 
             gevent.killall(jobs)
-
-
-def load_nodes(conf):
-    nodes = {}
-
-    conf = json.loads(open(conf).read())
-
-    for node_id, node_port in conf['nodes'].items():
-        nodes[int(node_id)] = int(node_port)
-
-    return nodes
-
-
-def recv_thread(raft):
-    conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    conn.bind(('127.0.0.1', nodes[node_id]))
-
-    while True:
-        data, addr = conn.recvfrom(1024)
-        data = json.loads(data)
-
-        if 'function' not in data:
-            print('invalid request from %s: %s' % (addr, data))
-
-        else:
-            print(data, addr)
-
-            if data['function'] == 'request_vote':
-                data = raft.request_vote(data['term'],
-                                         data['candidate_id'],
-                                         data['last_log_index'],
-                                         data['last_log_term'])
-
-            elif data['function'] == 'append_entries':
-                data = raft.append_entries(data['term'],
-                                           data['leader_id'],
-                                           data['prev_log_index'],
-                                           data['prev_log_term'],
-                                           data['entries'],
-                                           data['leader_commit_index'])
-
-            else:
-                raise RuntimeError('invalid function from %s: %s' % (addr, data))
-
-            data = bytes(json.dumps(data), 'utf-8')
-            conn.sendto(data, 0, addr)
 
 
 nodes = load_nodes(sys.argv[1])
