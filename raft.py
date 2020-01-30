@@ -16,7 +16,6 @@ rng.seed(0)
 
 def election_timer():
     timeout = 5 * rng.randint(50, 100) / 100
-    print('timeout: %f' % timeout)
 
     timer = gevent.Timeout(timeout)
     timer.start()
@@ -48,7 +47,6 @@ def raft_recv_thread(raft):
 
     while True:
         data, addr = node.raft_recv()
-        data = pickle.loads(data)
 
         if 'function' not in data:
             print('invalid request from %s: %s' % (addr, data))
@@ -75,7 +73,6 @@ def raft_recv_thread(raft):
 
             data['rpc_id'] = rpc_id
 
-            data = pickle.dumps(data)
             node.raft_send_to(data, addr)
 
 
@@ -85,7 +82,6 @@ def client_recv_thread(raft):
 
     while True:
         data, addr = node.client_recv()
-        data = pickle.loads(data)
 
         if raft.leader_id != raft.node_id:
             data = {'success': False, 'leader_id': raft.leader_id}
@@ -94,7 +90,7 @@ def client_recv_thread(raft):
             n = len(raft.log)
             raft.log.append(log(raft.current_term, int(data['value'])))
 
-            for e in raft.send_entries:
+            for e in raft.send_entries.values():
                 e.set()
 
             while True:
@@ -106,7 +102,6 @@ def client_recv_thread(raft):
 
             data = {'success': True}
 
-        data = pickle.dumps(data)
         node.client_send_to(data, addr)
 
 
@@ -124,9 +119,13 @@ class node(object):
         self.raft_socket.bind(('127.0.0.1', self.raft_port))
 
     def raft_recv(self):
-        return self.raft_socket.recvfrom(1024)
+        data, addr = self.raft_socket.recvfrom(1024)
+        data = pickle.loads(data)
+
+        return data, addr
 
     def raft_send_to(self, data, addr):
+        data = pickle.dumps(data)
         self.raft_socket.sendto(data, 0, addr)
 
     def raft_call(self, function, data):
@@ -150,9 +149,13 @@ class node(object):
         self.client_socket.bind(('127.0.0.1', self.client_port))
 
     def client_recv(self):
-        return self.client_socket.recvfrom(1024)
+        data, addr = self.client_socket.recvfrom(1024)
+        data = pickle.loads(data)
+
+        return data, addr
 
     def client_send_to(self, data, addr):
+        data = pickle.dumps(data)
         self.client_socket.sendto(data, 0, addr)
 
 
@@ -179,48 +182,40 @@ class raft(object):
 
         self.demoted = event.Event()
         self.commit = event.Event()
-        self.send_entries = [event.Event()] * len(nodes)
+        self.send_entries = {node_id: event.Event() for node_id in nodes.keys()}
         self.reset_timer = event.Event()
 
     def request_vote(self, term, candidate_id, last_log_index, last_log_term):
         demote = term > self.current_term
 
         if demote == True:
-            print('request_vote: higher term found, demoting...')
-
             self.current_term = term
             self.voted_for = None
 
             self.demoted.set()
 
         if term < self.current_term:
-            print('request_vote: vote to #%d denied' % candidate_id)
             return {'term': self.current_term, 'vote_granted': False}
 
-        if self.voted_for != None and self.voted_for != candidate_id:
-            print('request_vote: vote to #%d denied' % candidate_id)
+        if self.voted_for != None:
+            assert(self.voted_for != candidate_id)
             return {'term': self.current_term, 'vote_granted': False}
 
         if len(self.log) != 0:
             if last_log_term < self.log[-1].term:
-                print('request_vote: vote to #%d denied' % candidate_id)
                 return {'term': self.current_term, 'vote_granted': False}
 
             if last_log_term == self.log[-1].term and last_log_index < len(self.log):
-                print('request_vote: vote to #%d denied' % candidate_id)
                 return {'term': self.current_term, 'vote_granted': False}
 
         self.voted_for = candidate_id
 
-        print('request_vote: vote to #%d granted' % candidate_id)
         return {'term': self.current_term, 'vote_granted': True}
 
     def append_entries(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit_index):
         demote = term > self.current_term
 
         if demote == True:
-            print('append_entries: higher term found, demoting...')
-
             self.current_term = term
             self.voted_for = None
 
@@ -251,13 +246,37 @@ class raft(object):
         if leader_commit_index > self.commit_index:
             self.commit_index = min(leader_commit_index, len(self.log) - 1)
 
-        assert(self.last_applied <= self.commit_index)
-
-        while self.last_applied < self.commit_index:
-            print('applying state: %d' % self.log[self.last_applied + 1].value)
-            self.last_applied += 1
+        self.apply_committed()
 
         return {'term': self.current_term, 'success': True}
+
+    def apply_committed(self):
+        assert(self.last_applied <= self.commit_index)
+
+        commits_applied = False
+
+        while self.last_applied < self.commit_index:
+            print('applying value: %d' % self.log[self.last_applied + 1].value)
+            self.last_applied += 1
+            commits_applied = True
+
+        return commits_applied
+
+    def adjust_commit_index(self):
+        for n in range(len(self.raft.log) - 1, self.raft.commit_index, -1):
+            if self.raft.log[n].term != self.raft.current_term:
+                break
+
+            r = 1
+
+            for j in self.match_index.values():
+                if j >= n:
+                    r += 1
+
+            if r >= self.raft.quorum:
+                self.raft.commit_index = n
+
+                break
 
 
 class follower(object):
@@ -343,12 +362,12 @@ class candidate(object):
         return jobs
 
     def run(self):
+        print('starting new term #%d' % (self.raft.current_term + 1))
+
         self.raft.current_term += 1
         self.raft.voted_for = self.raft.node_id
-
-        print('starting new term #%d' % self.raft.current_term)
-
         self.votes_granted = 1
+
         self.vote_processed.clear()
 
         timer = election_timer()
@@ -372,10 +391,11 @@ class leader(object):
     def __init__(self, raft):
         self.raft = raft
         self.raft.demoted.clear()
+
         self.raft.leader_id = self.raft.node_id
 
-        self.next_index = [len(self.raft.log)] * len(self.raft.nodes)
-        self.match_index = [-1] * len(self.raft.nodes)
+        self.next_index = {node_id: len(self.raft.log) for node_id in self.raft.nodes.keys()}
+        self.match_index = {node_id: -1 for node_id in self.raft.nodes.keys()}
 
     def _send_append_entries(self, node_id, node):
         prev_log_index = self.next_index[node_id] - 1
@@ -417,29 +437,12 @@ class leader(object):
             assert(self.next_index[node_id] > 0)
             self.next_index[node_id] -= 1
 
-        for i in range(len(self.raft.log) - 1, self.raft.commit_index, -1):
-            if self.raft.log[i].term != self.raft.current_term:
-                break
+        self.raft.adjust_commit_index()
 
-            r = 1
-
-            for j in self.match_index:
-                if j >= i:
-                    r += 1
-
-            if r >= self.raft.quorum:
-                self.raft.commit_index = i
-
-                break
-
-        assert(self.raft.last_applied <= self.raft.commit_index)
-
-        while self.raft.last_applied < self.raft.commit_index:
-            print('applying state: %d' % self.raft.log[self.raft.last_applied + 1].value)
-            self.raft.last_applied += 1
+        if self.raft.apply_committed() == True:
             self.raft.commit.set()
 
-            for e in self.raft.send_entries:
+            for e in self.raft.send_entries.values():
                 e.set()
 
         return success
@@ -461,7 +464,7 @@ class leader(object):
             finally:
                 timer.close()
 
-    def _start_replicators(self):
+    def run(self):
         jobs = []
 
         for node_id, node in self.raft.nodes.items():
@@ -470,10 +473,6 @@ class leader(object):
 
             jobs.append(gevent.spawn(self._replicator, node_id, node))
 
-        return jobs
-
-    def run(self):
-        jobs = self._start_replicators()
         self.raft.demoted.wait()
 
         gevent.killall(jobs)
