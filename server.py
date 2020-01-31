@@ -286,8 +286,8 @@ def load_nodes(conf):
 
     conf = json.loads(open(conf).read())
 
-    for node_id, (raft_port, client_port) in conf['nodes'].items():
-        rpc[int(node_id)] = channel(client_port)
+    for node_id, (raft_port, rpc_port) in conf['nodes'].items():
+        rpc[int(node_id)] = channel(rpc_port)
         nodes[int(node_id)] = node(raft_port)
 
     return nodes, rpc
