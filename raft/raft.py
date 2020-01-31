@@ -20,37 +20,37 @@ class raft(object):
             self.demote(term)
 
         if term < self.current_term:
-            return {'term': self.current_term, 'vote_granted': False}
+            return self.current_term, False
 
         if self.voted_for != None and self.voted_for != candidate_id:
-            return {'term': self.current_term, 'vote_granted': False}
+            return self.current_term, False
 
         if len(self.log) != 0:
             if last_log_term < self.log[-1].term:
-                return {'term': self.current_term, 'vote_granted': False}
+                return self.current_term, False
 
             if last_log_term == self.log[-1].term and last_log_index < len(self.log) - 1:
-                return {'term': self.current_term, 'vote_granted': False}
+                return self.current_term, False
 
         self.voted_for = candidate_id
 
-        return {'term': self.current_term, 'vote_granted': True}
+        return self.current_term, True
 
     def append_entries(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit_index):
         if term > self.current_term:
             self.demote(term)
 
         if term < self.current_term:
-            return {'term': self.current_term, 'success': False}
+            return self.current_term, False
 
         self.helper.signal_reset_election_timer(leader_id)
 
         if prev_log_index != -1:
             if prev_log_index >= len(self.log):
-                return {'term': self.current_term, 'success': False}
+                return self.current_term, False
 
             if prev_log_term != self.log[prev_log_index].term:
-                return {'term': self.current_term, 'success': False}
+                return self.current_term, False
 
         for i in range(len(entries)):
             index = prev_log_index + i + 1
@@ -66,7 +66,7 @@ class raft(object):
 
         self.apply_committed()
 
-        return {'term': self.current_term, 'success': True}
+        return self.current_term, True
 
     def apply_committed(self):
         assert(self.last_applied <= self.commit_index)

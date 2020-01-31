@@ -236,18 +236,22 @@ def raft_thread(raft, node):
             print('< recv:', data, addr)
 
         if data['function'] == 'request_vote':
-            data = raft.request_vote(data['term'],
-                                     data['candidate_id'],
-                                     data['last_log_index'],
-                                     data['last_log_term'])
+            term, vote_granted = raft.request_vote(data['term'],
+                                                   data['candidate_id'],
+                                                   data['last_log_index'],
+                                                   data['last_log_term'])
+
+            data = {'term': term, 'vote_granted': vote_granted}
 
         elif data['function'] == 'append_entries':
-            data = raft.append_entries(data['term'],
-                                       data['leader_id'],
-                                       data['prev_log_index'],
-                                       data['prev_log_term'],
-                                       data['entries'],
-                                       data['leader_commit_index'])
+            term, success = raft.append_entries(data['term'],
+                                                data['leader_id'],
+                                                data['prev_log_index'],
+                                                data['prev_log_term'],
+                                                data['entries'],
+                                                data['leader_commit_index'])
+
+            data = {'term': term, 'success': success}
 
         data['rpc_id'] = rpc_id
 
