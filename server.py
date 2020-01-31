@@ -165,11 +165,7 @@ class raft_helper(object):
     def wait_for_election_won(self):
         try:
             gevent.wait([self.election_won, self.demoted], self._election_timeout(), 1)
-
-            if self.election_won.is_set() == True:
-                return True
-
-            return False
+            return self.election_won.is_set()
 
         finally:
             self.election_won.clear()
