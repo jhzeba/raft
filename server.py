@@ -270,7 +270,7 @@ def rpc_thread(raft, rpc):
             data = {'success': False, 'leader_id': raft.leader()}
 
         else:
-            raft.append(int(data['value']))
+            raft.append(data['value'])
 
             data = {'success': True, 'leader_id': raft.leader()}
 
