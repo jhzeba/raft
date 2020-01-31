@@ -8,13 +8,5 @@ def run(raft, helper):
     while True:
         follower(raft, helper).run()
 
-        print('leader timeout, promoting to candidate...')
-
         if candidate(raft, helper).run() == True:
-            print('election won, promoting to leader...')
             leader(raft, helper).run()
-
-            print('demoting to follower...')
-
-        else:
-            print('election lost, demoting to follower...')
