@@ -300,7 +300,7 @@ def load_nodes(conf):
 nodes, rpc = load_nodes(sys.argv[1])
 node_id = int(sys.argv[2])
 
-h = raft_helper(node_id, nodes, 5)
+h = raft_helper(node_id, nodes, 0.3)
 r = raft.raft(h)
 
 gevent.spawn(raft_thread, r, nodes[node_id])
