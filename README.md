@@ -26,7 +26,7 @@ $ python3 ./server.py raft.conf node_id
 Client rpc can be invoked by:
 
 ```
-$ python ./client.py rpc_port value
+$ python3 ./client.py rpc_port value
 ```
 
 Localhost (127.0.0.1) is used for all communication.
