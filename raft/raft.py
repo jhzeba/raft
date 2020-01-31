@@ -22,8 +22,7 @@ class raft(object):
         if term < self.current_term:
             return {'term': self.current_term, 'vote_granted': False}
 
-        if self.voted_for != None:
-            assert(self.voted_for != candidate_id)
+        if self.voted_for != None and self.voted_for != candidate_id:
             return {'term': self.current_term, 'vote_granted': False}
 
         if len(self.log) != 0:
